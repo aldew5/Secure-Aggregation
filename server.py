@@ -12,8 +12,8 @@ from model import *
 
 # global variables
 server_port = 2019
-num_clients = 5
-threshold = 3
+num_clients = 2
+threshold = 2
 dim = (1, 12)
 lr = 1e-4
 num_epochs = 100
@@ -50,10 +50,15 @@ class secaggserver:
         self.register_handles()
 
     def clear(self):
-        """called between each iteration"""
+        """
+        Called between each iteration
+        
+        Resets key dictionaries and updates round and iteration counters
+        """
         self.U_0, self.U_1, self.U_2, self.U_3, self.U_4 = [], [], [], [], []
         self.ready_client_ids = set()
-
+        
+        # private keys
         self.c_pk_dict, self.s_pk_dict, self.e_uv_dict = {}, {}, {}
         self.sk_shares_dict, self.b_shares_dict = {}, {}
 
@@ -62,21 +67,27 @@ class secaggserver:
         self.lasttime = time.time()
         self.curr_round = -1
         self.iter_no += 1
-
+    
+    #TODO: can be combined with above
     def move_to_next_iteration(self):
-        # print("move to next iteration\n\n\n")
+        # emit message to client
         for client_id in self.ready_client_ids:
             emit("waitandtry", room=client_id) 
         self.clear()
 
-    # use a seed to generate a random mask with same shape as the input
-
     def gen_mask(self, seed):
+        """
+        Use a seed to generate a random mask with same shape as the input
+        """
         np.random.seed(seed)
         return np.float64(np.random.rand(self.dim[0], self.dim[1]))
 
     def meta_handler(self, name, roundno, userlist, resp, add_info):
-        # sleep_for_a_while(name)
+        """
+        add_info: add_info function corresponding to the particular round
+            
+        Handles
+        """
 
         if (self.curr_round != roundno) or request.sid not in userlist:
             emit('waitandtry')
@@ -88,7 +99,10 @@ class secaggserver:
             else:
                 # print(f"{request.sid} sends info for Round {roundno}")
                 add_info(resp)
-
+                
+    # Advertise keys
+    # - user sends signed public keys
+    # - server must broadcast list of received public keys to all users
     def round_0_add_info(self, resp):  # AdvertiseKeys
         self.ready_client_ids.add(request.sid)
         public_keys = pickle.loads(resp)
@@ -101,22 +115,28 @@ class secaggserver:
         if (self.curr_round != 0): return
     
         # start next round
+        # either we have all clients or at least as many as the min threshold
         if (len(self.ready_client_ids) == self.n) or \
             (time.time()-self.lasttime > time_max and len(self.ready_client_ids) >= self.t):
+            
+            # notify of second case
             if (time.time()-self.lasttime > time_max and len(self.ready_client_ids) >= self.t):
                 print("NOTE: max time has passed without receiving response from all clients, but enough clients have responded")
-            self.curr_round = 1  
+                
+            self.curr_round = 1
             print(f"Collected keys from {len(self.ready_client_ids)} clients -- Starting Round 1.")
             
             ready_clients = list(self.ready_client_ids)
             self.U_1 = ready_clients
-            # print("U_1: ", self.U_1)
+
             self.ready_client_ids.clear()
             self.lasttime = time.time()
             for client_id in ready_clients:
+                # dumps serializes object hierarchy
                 emit('share_keys', (pickle.dumps(self.c_pk_dict), pickle.dumps(self.s_pk_dict)), room=client_id)
             
             time.sleep(time_max)
+            # next round
             if (self.curr_round == 1): # only called if round 1 action never succeeded
                 self.round_1_attempt_action() # in case someone disconnects
 
@@ -273,12 +293,12 @@ class secaggserver:
                 if abs(self.rsquares[-2]-self.rsquares[-3]) < rsquare_thres and  \
                    abs(self.rsquares[-1]-self.rsquares[-2]) < rsquare_thres:
                     print("Ready to finish training")
-                    plot(self.out_dir, np.array(self.mses), np.array(self.rsquares))
+                    #plot(self.out_dir, np.array(self.mses), np.array(self.rsquares))
                     for client_id in self.all_seen_clients: emit("disconnect", room=client_id)
                     return
             
-            if (self.iter_no-1) % 10 == 0:
-                plot(self.out_dir, np.array(self.mses), np.array(self.rsquares))
+                #if (self.iter_no-1) % 10 == 0:
+                #plot(self.out_dir, np.array(self.mses), np.array(self.rsquares))
             
             self.move_to_next_iteration()
 

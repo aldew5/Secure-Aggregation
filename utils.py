@@ -2,8 +2,8 @@ import pickle
 import os
 from safe_primes import PRIMES
 from secretsharing import SecretSharer
-from Cryptodome.Cipher import AES
-from Cryptodome.Hash import SHA256
+from Crypto.Cipher import AES
+from Crypto.Hash import SHA256
 
 import logging
 log = logging.getLogger('werkzeug')

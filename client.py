@@ -102,8 +102,14 @@ class SecAggregator:
         for v in U_2:
             c_v_pk = self.c_pk_dict[v]
             shared_key = KA.agree(self.c_u_sk, c_v_pk)
+            print("IN CLIENT ", AE.decrypt(
+                shared_key, shared_key, self.e_uv_dict[v]))
+            
+            
             metadata = pickle.loads(AE.decrypt(
                 shared_key, shared_key, self.e_uv_dict[v]))
+                
+                
             assert metadata[0] == v and metadata[1] == self.id
             if v not in U_3:
                 # for offline users, reconstruct s_v_sk (send its shares)
@@ -117,7 +123,8 @@ class SecAggregator:
 class secaggclient:
     def __init__(self, serverport, input, train_id, lr, num_epochs, batch_size):
         # model
-        self.X_train, self.y_train = get_train_data(f"data{num_clients}", train_id)
+        #self.X_train, self.y_train = get_train_data(f"data{num_clients}", train_id)
+        self.X_train, self.y_train = get_train_data(f"data5", train_id)
         self.model = None
         self.model_weights = None
         self.lr = lr
@@ -241,5 +248,5 @@ if __name__ == "__main__":
     train_id = args.train_id
 
     input = np.zeros(dim)
-    c = secaggclient(server_port, input, train_id,
+    c = secaggclient(server_port, input, 1,
                      lr, num_epochs, batch_size)  # this input is a placeholder
