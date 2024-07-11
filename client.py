@@ -17,8 +17,6 @@ def sleep_for_a_while(s, x=1):
         sleep_duration = random.uniform(0, args.sleep_time)
         print(f"### {s}: sleeping for {sleep_duration} seconds")
         time.sleep(random.uniform(0, sleep_duration))
-        # print(f"### {s}: woke up")
-
 
 class SecAggregator:
     def __init__(self, input):
@@ -102,9 +100,6 @@ class SecAggregator:
         for v in U_2:
             c_v_pk = self.c_pk_dict[v]
             shared_key = KA.agree(self.c_u_sk, c_v_pk)
-            print("IN CLIENT ", AE.decrypt(
-                shared_key, shared_key, self.e_uv_dict[v]))
-            
             
             metadata = pickle.loads(AE.decrypt(
                 shared_key, shared_key, self.e_uv_dict[v]))
@@ -144,10 +139,20 @@ class secaggclient:
         self.sio.wait()
 
     def train_model_and_calc_gradient(self):
+        """
+        Get initial weights from server, train on the particular
+        client's subset of total dataset and set self.gradient to the gradient
+        update.
+        
+        We will send this update to the server so it computes the aggregate
+        without learning the update.
+        """
         self.model=LinearRegression(self.lr, self.num_epochs,
                                self.batch_size, self.model_weights)
         self.model.train(self.X_train, self.y_train)
         # print(f"training R^2: {self.model.score(self.X_train, self.y_train)}")
+        
+        # gradient *update*
         self.gradient = self.model.output_gradient()
         # print(f"gradient:\n{self.gradient}")
 
@@ -248,5 +253,5 @@ if __name__ == "__main__":
     train_id = args.train_id
 
     input = np.zeros(dim)
-    c = secaggclient(server_port, input, 1,
+    c = secaggclient(server_port, input, train_id,
                      lr, num_epochs, batch_size)  # this input is a placeholder

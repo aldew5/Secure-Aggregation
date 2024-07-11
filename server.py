@@ -12,14 +12,19 @@ from model import *
 
 # global variables
 server_port = 2019
-num_clients = 2
-threshold = 2
+num_clients = 5
+threshold = 5
 dim = (1, 12)
 lr = 1e-4
 num_epochs = 100
 batch_size = 48
 X_test, y_test = get_test_data()
 rsquare_thres = 0.001
+
+# NOTE:
+# Does not implement round 3 (consistency checks) which is not
+# required in the honest-but-curious setting
+
 
 def sleep_for_a_while(s):
     # print(f"### {s}: sleeping for 5 seconds")
@@ -34,6 +39,9 @@ class secaggserver:
         self.t = t  # the threshold
         self.iter_no = 0
         self.model_weights = np.zeros(self.dim)
+        self.start_time = None
+        self.end_time = None
+        self.initial_time = datetime.datetime.now()
 
         self.all_seen_clients = set()
 
@@ -88,7 +96,6 @@ class secaggserver:
             
         Handles
         """
-
         if (self.curr_round != roundno) or request.sid not in userlist:
             emit('waitandtry')
         else:  # Add entries for punctual users
@@ -102,16 +109,18 @@ class secaggserver:
                 
     # Advertise keys
     # - user sends signed public keys
-    # - server must broadcast list of received public keys to all users
-    def round_0_add_info(self, resp):  # AdvertiseKeys
+    def round_0_add_info(self, resp):
         self.ready_client_ids.add(request.sid)
         public_keys = pickle.loads(resp)
+        # c_u sk, pk are DH keypairs
         self.c_pk_dict[request.sid] = public_keys['c_u_pk']
         self.s_pk_dict[request.sid] = public_keys['s_u_pk']
 
 
-    def round_0_attempt_action(self): # AdvertiseKeys
+    def round_0_attempt_action(self):
         """either start next round, move to next iteration, or keep on waiting for next client (default fall through)"""
+        #print("START", datetime.datetime.now())
+        self.start_time = datetime.datetime.now()
         if (self.curr_round != 0): return
     
         # start next round
@@ -137,7 +146,7 @@ class secaggserver:
             
             time.sleep(time_max)
             # next round
-            if (self.curr_round == 1): # only called if round 1 action never succeeded
+            if (self.curr_round == 1):
                 self.round_1_attempt_action() # in case someone disconnects
 
         # move to next iteration
@@ -145,8 +154,11 @@ class secaggserver:
             self.move_to_next_iteration()
         # do nothing (wait for next client)
 
-
-    def round_1_add_info(self, resp):  # ShareKeys
+    # Share keys
+    # - Server must broadcast list of received public keys to all users
+    # - User validates signatures, computing s_{u, v}
+    # - User computes t-out-of-n secret shares and sends encrypted verions to server
+    def round_1_add_info(self, resp):
         self.ready_client_ids.add(request.sid)
         e_uv_dict = pickle.loads(resp)
         # for every user v, record dict[v][u] = e_{u,v}
@@ -156,7 +168,10 @@ class secaggserver:
             self.e_uv_dict[key][request.sid] = value
 
     def round_1_attempt_action(self):  # ShareKeys
-        """either start next round, move to next iteration, or keep on waiting for next client (default fall through)"""
+        """
+        Either start next round, move to next iteration, or keep on waiting
+        for next client (default fall through)
+        """
         if (self.curr_round != 1):
             return
 
@@ -166,34 +181,42 @@ class secaggserver:
             if (time.time()-self.lasttime > time_max and len(self.ready_client_ids) >= self.t):
                 print("NOTE: max time has passed without receiving response from all clients, but enough clients have responded")
             self.curr_round = 2
+            
+            # received validate signatures
             print(f"Collected e_uv from {len(self.ready_client_ids)} clients -- Starting Round 2.")
 
             ready_clients = list(self.ready_client_ids)
             self.U_2 = ready_clients
-            # print("U_2: ", ready_clients)
+            
             self.ready_client_ids.clear()
             for client_id in ready_clients:
+                # send signal for the next round
                 emit('masked_input_collection', pickle.dumps(
                     self.e_uv_dict[client_id]), room=client_id)
             self.lasttime = time.time()
             
             time.sleep(time_max)
-            if (self.curr_round == 2):  # only called if round 2 action never succeeded
-                self.round_2_attempt_action()  # in case someone disconnects
+            # only called if round 2 action never succeeded
+            if (self.curr_round == 2):
+                # in case someone disconnects
+                self.round_2_attempt_action()
 
         # move to next iteration
         elif (time.time()-self.lasttime > time_max and len(self.ready_client_ids) < self.t):
             self.move_to_next_iteration()
         # do nothing (wait for next client)
 
-
-    def round_2_add_info(self, resp):  # MaskedInputCollection
+    # MaskedInputCollection
+    # - Server forwards received encrypted shares
+    # - User computes maksed input y_u and sends back to server
+    def round_2_add_info(self, resp):
         # decode the masked input
         self.ready_client_ids.add(request.sid)
         masked_input = pickle.loads(resp)
+        # these inputs are gradients?
         self.aggregated_value += masked_input
 
-    def round_2_attempt_action(self):  # MaskedInputCollection
+    def round_2_attempt_action(self):
         """either start next round, move to next iteration, or keep on waiting for next client (default fall through)"""
         if (self.curr_round != 2):
             return
@@ -208,7 +231,7 @@ class secaggserver:
 
             ready_clients = list(self.ready_client_ids)
             self.U_3 = ready_clients
-            # print("U_3", ready_clients)
+            
             self.ready_client_ids.clear()
             for client_id in ready_clients:
                 emit('unmasking', pickle.dumps(self.U_3), room=client_id)
@@ -222,8 +245,11 @@ class secaggserver:
         elif (time.time()-self.lasttime > time_max and len(self.ready_client_ids) < self.t):
             self.move_to_next_iteration()
         # do nothing (wait for next client)
-
-
+    
+    # Unmasking (skip consistency check)
+    # - Server sends a list {v, sigma'} of survived users
+    # - User sends shares of b_u for aliver users and s_u^{pk} for dropped
+    # - Then server can reconstruct the final aggregated value
     def round_3_add_info(self, resp):  # Unmasking
         # decode the masked input
         self.ready_client_ids.add(request.sid)
@@ -236,10 +262,8 @@ class secaggserver:
             if id not in self.b_shares_dict:
                 self.b_shares_dict[id] = []
             self.b_shares_dict[id].append(share)
-        # print(f"\n{request.sid} sent secret shares.")
 
     def round_3_attempt_action(self):  # Unmasking
-        """either compute result, move to next iteration, or keep on waiting for next client (default fall through)"""
         if (self.curr_round != 3):
             return
 
@@ -259,6 +283,7 @@ class secaggserver:
             # reconstruct s_{u,v} for all u in U2\U3
             dropped_out_users = [u for u in self.U_2 if u not in self.U_3]
             for u in dropped_out_users:
+                # reconstruct secrets
                 s_u_sk = SS.recon(self.sk_shares_dict[u])
 
                 for v in self.U_3:
@@ -286,13 +311,20 @@ class secaggserver:
             LR = LinearRegression(lr, num_epochs, batch_size, self.model_weights)
             mse, rsquare = LR.eval(X_test, y_test)
             print('Test R^2: ' + str(rsquare))
+            print("Test MSE: " + str(mse))
+
             self.mses.append(mse)
             self.rsquares.append(rsquare)
            
             if self.iter_no >= 10:
+                # also, R^2 sufficiently low
                 if abs(self.rsquares[-2]-self.rsquares[-3]) < rsquare_thres and  \
                    abs(self.rsquares[-1]-self.rsquares[-2]) < rsquare_thres:
                     print("Ready to finish training")
+                    
+                    print("TRAIN START:", self.initial_time)
+                    print("TRAIN FINISH", datetime.datetime.now())
+                    
                     #plot(self.out_dir, np.array(self.mses), np.array(self.rsquares))
                     for client_id in self.all_seen_clients: emit("disconnect", room=client_id)
                     return
@@ -300,11 +332,17 @@ class secaggserver:
                 #if (self.iter_no-1) % 10 == 0:
                 #plot(self.out_dir, np.array(self.mses), np.array(self.rsquares))
             
+            # emits weight and try
+            #print("END", datetime.datetime.now())
+            self.end_time = datetime.datetime.now()
+            print(self.end_time - self.start_time)
+            #self.total_time += (self.end_time - self.start_time).microseconds
+            #print(self.total_time)
             self.move_to_next_iteration()
 
         # move to next iteration
         elif (time.time()-self.lasttime > time_max and len(self.ready_client_ids) < self.t):
-            # print("could not compute final aggregate")
+            print("could not compute final aggregate")
             self.move_to_next_iteration()
 
 
