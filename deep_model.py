@@ -8,14 +8,12 @@ from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
 import numpy as np
 
-# Load and preprocess the MNIST data
 (x_train, y_train), (x_test, y_test) = mnist.load_data()
 
-# ResNet expects 3 channels, so we need to stack the grayscale image to make it 3 channels
+
 x_train = np.stack([x_train]*3, axis=-1)
 x_test = np.stack([x_test]*3, axis=-1)
 
-# ResNet50 expects input shape of (224, 224, 3)
 x_train = tf.image.resize(x_train, (224, 224)).numpy()
 x_test = tf.image.resize(x_test, (224, 224)).numpy()
 
@@ -25,16 +23,15 @@ x_test = x_test / 255.0
 y_train = to_categorical(y_train, 10)
 y_test = to_categorical(y_test, 10)
 
-# Define the ResNet model
 input_shape = (224, 224, 3)
 
 resnet = ResNet50(weights='imagenet', include_top=False, input_shape=input_shape)
 
-# Freeze the layers of ResNet50
+# freeze
 for layer in resnet.layers:
     layer.trainable = False
 
-# Add custom layers on top of ResNet50
+# tunable layers
 inputs = Input(shape=input_shape)
 x = resnet(inputs, training=False)
 x = Flatten()(x)
